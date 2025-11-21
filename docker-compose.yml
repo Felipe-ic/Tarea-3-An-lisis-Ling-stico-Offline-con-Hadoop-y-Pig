@@ -1,0 +1,146 @@
+version: "3.8"
+
+services:
+  # --- TAREA 2: SERVICIOS EXISTENTES (Mantener igual) ---
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    ports:
+      - "29092:29092" 
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    command: ["serve"] 
+    volumes:
+      - ollama_data:/root/.ollama
+
+  persistor_bdd:
+    build: .
+    container_name: persistor_bdd
+    command: python persistor_bdd.py 
+    volumes:
+      - .:/app
+      - db_data:/app
+    depends_on:
+      kafka:
+        condition: service_started
+
+  generador_trafico:
+    build: .
+    container_name: generador_trafico
+    command: python generador_trafico.py
+    volumes:
+      - .:/app
+    depends_on:
+      kafka:
+        condition: service_started
+      persistor_bdd:
+        condition: service_started
+
+  consumidor_llm:
+    build: .
+    command: python consumidor_llm.py
+    volumes:
+      - .:/app
+    depends_on:
+      kafka:
+        condition: service_started
+      ollama:
+        condition: service_started
+    deploy:
+      replicas: 3
+
+  procesador_flink:
+    build: .
+    container_name: procesador_flink_py
+    command: python procesador_flink.py
+    volumes:
+      - .:/app
+    depends_on:
+      kafka:
+        condition: service_started
+
+  gestor_reintentos:
+    build: .
+    container_name: gestor_reintentos
+    command: python gestor_reintentos.py
+    volumes:
+      - .:/app
+    depends_on:
+      kafka:
+        condition: service_started
+    
+  flink:
+    image: flink:1.17-scala_2.12
+    container_name: flink_jobmanager
+    command: jobmanager 
+    environment:
+      - JOB_MANAGER_RPC_ADDRESS=flink 
+    ports:
+      - "8081:8081"
+
+  # --- TAREA 3: ECOSISTEMA HADOOP & PIG (NUEVO) ---
+  
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+    environment:
+      - CLUSTER_NAME=test
+    env_file:
+      - ./hadoop.env
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+    env_file:
+      - ./hadoop.env
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870"
+    depends_on:
+      - namenode
+
+  # Contenedor Cliente para ejecutar Pig
+  pig-client:
+    image: bde2020/hadoop-base:2.0.0-hadoop3.2.1-java8
+    container_name: pig_client
+    command: tail -f /dev/null  # Mantiene el contenedor vivo
+    env_file:
+      - ./hadoop.env
+    environment:
+      SERVICE_PRECONDITION: "namenode:9870 datanode:9864"
+    volumes:
+      - .:/app  # Montamos la carpeta actual para acceder a los scripts
+    depends_on:
+      - namenode
+      - datanode
+
+volumes:
+  ollama_data:
+  db_data:
+  hadoop_namenode:
+  hadoop_datanode:
