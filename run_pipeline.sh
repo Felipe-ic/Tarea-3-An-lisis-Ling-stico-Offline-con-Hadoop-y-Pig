@@ -1,4 +1,9 @@
 
+BAjar cualquier contenedor existente y luego levantarlos:
+
+docker-compose down -v
+docker-compose up -d
+
 
 # 1. Extraer datos de la BDD/CSV a texto plano
 echo "[1/4] Extrayendo datos..."
